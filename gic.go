@@ -78,7 +78,26 @@ func serve(cfg Config) {
 	}
 	defer conn.Close()
 	log.Infof("Connected to %s", address)
-	conn.Write([]byte(fmt.Sprintf("PASS %s\n", password)))
+	if password != "" {
+		_, err = conn.Write([]byte(fmt.Sprintf("PASS %s\n", password)))
+		if err != nil {
+			log.Fatalf("Error writing password: %v", err)
+		}
+	}
+	nick := cfg.Server.Nick
+	if nick == "" {
+		nick = "gic"
+	}
+	_, err = conn.Write([]byte(fmt.Sprintf("NICK %s", nick)))
+	if err != nil {
+		log.Fatalf("Failed sending initial NICK cmd")
+	}
+	umsg := fmt.Sprintf("USER %s localhost %s :%s", nick, cfg.Server.Host, nick)
+	_, err = conn.Write([]byte(umsg))
+	if err != nil {
+		log.Fatalf("Failed sending initial USER cmd")
+	}
+	log.Infof("Ready to go\n")
 }
 
 func main() {
