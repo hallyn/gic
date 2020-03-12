@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
@@ -59,23 +60,25 @@ func serve(cfg Config) {
 			password = cfg.Server.Password
 		}
 	}
-	fmt.Printf("Password is %s\n", password) // DROPME
-	if cfg.Server.SSL {
-		log.Fatalf("ssl not yet supported")
-	}
 	if cfg.Server.Port < 1 {
 		cfg.Server.Port = 6667
 		if cfg.Server.SSL {
 			cfg.Server.Port = 6669
 		}
 	}
+	var conn net.Conn
 	address := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	conn, err := net.Dial("tcp", address)
+	if cfg.Server.SSL {
+		conn, err = tls.Dial("tcp", address, &tls.Config{})
+	} else {
+		conn, err = net.Dial("tcp", address)
+	}
 	if err != nil {
 		log.Fatalf("Error connecting to %s: %v", address, err)
 	}
 	defer conn.Close()
 	log.Infof("Connected to %s", address)
+	conn.Write([]byte(fmt.Sprintf("PASS %s\n", password)))
 }
 
 func main() {
