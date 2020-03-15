@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -17,17 +19,28 @@ import (
 type Config struct {
 	Server struct {
 		Port     int    `yaml:"port"`
-		Host     string `yaml:"host"`
+		Host     string `yaml:"host"` // the server's hostname
+		Name     string `yaml:"name"` // a servername for our purposes
 		SSL      bool   `yaml:"ssl"`
 		Password string `yaml:"password"`
 		Nick     string `yaml:"nick"`
 	} `yaml:"server"`
+	Config struct {
+		OutPath string `yaml:"output"`
+		Input struct {
+			InType string `yaml:"type"`
+			InPath string `yaml:"path"`
+		} `yaml:"input"`
+	} `yaml:"config"`
 }
 
 func usage(me string) {
 	fmt.Printf("Usage: %s [-f configfile]\n", me)
 	fmt.Printf("    configfile is ~/.config/gic/config")
 }
+
+var inFile = os.Stdin
+var outFile = os.Stdout // All server output goes here, whether duplicated elsewhere or not
 
 func fromKeyring(k string) (string, error) {
 	cmd1 := exec.Command("/usr/bin/keyctl", "request", "user", k)
@@ -43,9 +56,45 @@ func fromKeyring(k string) (string, error) {
 	return string(v), nil
 }
 
+func readConn(conn net.Conn, ch chan string) {
+	for {
+		b := make([]byte, 4096)
+		_, err := conn.Read(b)
+		if err != nil {
+			if err == io.EOF {
+				log.Infof("Read EOF from server, exiting")
+				os.Exit(0)
+			}
+			log.Infof("Server error: %v", err)
+			os.Exit(1)
+		}
+		ch<-string(b)
+	}
+}
+
+func readFile(f *os.File, ch chan string) {
+	for {
+		b := make([]byte, 4096)
+		_, err := f.Read(b)
+		if err != nil {
+			if err == io.EOF {
+				log.Infof("Read EOF from user, exiting")
+				os.Exit(0)
+			}
+			log.Infof("user input error: %v", err)
+			os.Exit(1)
+		}
+		ch<-string(b)
+	}
+}
+
 func serve(cfg Config) {
 	fmt.Printf("serving %v\n", cfg)
 	password := ""
+	serverName := cfg.Server.Name
+	if serverName == "" {
+		serverName = cfg.Server.Host
+	}
 	var err error
 	if cfg.Server.Password != "" {
 		l := len("keyring ")
@@ -97,7 +146,51 @@ func serve(cfg Config) {
 	if err != nil {
 		log.Fatalf("Failed sending initial USER cmd")
 	}
+	switch cfg.Config.OutPath {
+	case "":
+	case "default":
+		path := os.ExpandEnv("$HOME/.cache/gic")
+		path = filepath.Join(path, serverName)
+		log.Infof("creating %s\n", path)
+		err := os.MkdirAll(path, 0700)
+		if err != nil {
+			log.Fatalf("Failed creating server dir %s: %v", path, err)
+		}
+		path = filepath.Join(path, "server.out")
+		outFile, err = os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0700)
+		if err != nil {
+			log.Fatalf("Failed opening output file %s: %v", path, err)
+		}
+	default:
+		path := cfg.Config.OutPath
+		outFile, err = os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0700)
+		if err != nil {
+			log.Fatalf("Failed opening output file %s: %v", path, err)
+		}
+	}
+	defer outFile.Close()
 	log.Infof("Ready to go\n")
+
+	connInCh := make(chan string)
+	go readConn(conn, connInCh)
+	chSignal := make(chan os.Signal)
+	signal.Notify(chSignal, os.Interrupt)
+	inFileCh := make(chan string)
+	go readFile(inFile, inFileCh)
+
+	select {
+		case inLine :=<-inFileCh:
+			log.Infof("Command: %s", inLine)
+		case servLine :=<-connInCh:
+			log.Infof("Server: %s", servLine)
+			_, err := outFile.WriteString(servLine)
+			if err != nil {
+				log.Errorf("Error writing to server file: %v\n", err)
+			}
+		case <-chSignal:
+			log.Infof("Quitting")
+			return
+	}
 }
 
 func main() {
