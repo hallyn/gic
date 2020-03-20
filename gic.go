@@ -18,16 +18,17 @@ import (
 
 type Config struct {
 	Server struct {
-		Port     int    `yaml:"port"`
-		Host     string `yaml:"host"` // the server's hostname
-		Name     string `yaml:"name"` // a servername for our purposes
-		SSL      bool   `yaml:"ssl"`
-		Password string `yaml:"password"`
-		Nick     string `yaml:"nick"`
+		Port     int      `yaml:"port"`
+		Host     string   `yaml:"host"` // the server's hostname
+		Name     string   `yaml:"name"` // a servername for our purposes
+		SSL      bool     `yaml:"ssl"`
+		Password string   `yaml:"password"`
+		Nick     string   `yaml:"nick"`
+		Channels []string `yaml:"channels"`
 	} `yaml:"server"`
 	Config struct {
 		OutPath string `yaml:"output"`
-		Input struct {
+		Input   struct {
 			InType string `yaml:"type"`
 			InPath string `yaml:"path"`
 		} `yaml:"input"`
@@ -88,6 +89,33 @@ func readFile(f *os.File, ch chan string) {
 	}
 }
 
+func joinChans(conn net.Conn, chans []string) {
+	log.Infof("channels is: %v\n", chans)
+	for _, ch := range chans {
+		s := fmt.Sprintf("JOIN #%s\r\n", ch)
+		_, err := conn.Write([]byte(s))
+		if err != nil {
+			log.Fatalf("Error writing join message: %v\n", err)
+		}
+	}
+}
+
+func handleCommand(cmd string, conn net.Conn) error {
+	if len(cmd) > 3 && cmd[0:2] == ":m " {
+		fields := strings.SplitN(cmd, " ", 3)
+		if len(fields) != 3 {
+			return fmt.Errorf("Bad command")
+		}
+		send := fmt.Sprintf("PRIVMSG %s %s\r\n", fields[1], fields[2])
+		_, err := conn.Write([]byte(send))
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("Bad command")
+}
+
 func serve(cfg Config) {
 	fmt.Printf("serving %v\n", cfg)
 	password := ""
@@ -128,7 +156,7 @@ func serve(cfg Config) {
 	defer conn.Close()
 	log.Infof("Connected to %s", address)
 	if password != "" {
-		_, err = conn.Write([]byte(fmt.Sprintf("PASS %s\n", password)))
+		_, err = conn.Write([]byte(fmt.Sprintf("PASS %s\r\n", password)))
 		if err != nil {
 			log.Fatalf("Error writing password: %v", err)
 		}
@@ -136,15 +164,6 @@ func serve(cfg Config) {
 	nick := cfg.Server.Nick
 	if nick == "" {
 		nick = "gic"
-	}
-	_, err = conn.Write([]byte(fmt.Sprintf("NICK %s", nick)))
-	if err != nil {
-		log.Fatalf("Failed sending initial NICK cmd")
-	}
-	umsg := fmt.Sprintf("USER %s localhost %s :%s", nick, cfg.Server.Host, nick)
-	_, err = conn.Write([]byte(umsg))
-	if err != nil {
-		log.Fatalf("Failed sending initial USER cmd")
 	}
 	switch cfg.Config.OutPath {
 	case "":
@@ -178,18 +197,35 @@ func serve(cfg Config) {
 	inFileCh := make(chan string)
 	go readFile(inFile, inFileCh)
 
-	select {
-		case inLine :=<-inFileCh:
-			log.Infof("Command: %s", inLine)
-		case servLine :=<-connInCh:
-			log.Infof("Server: %s", servLine)
-			_, err := outFile.WriteString(servLine)
-			if err != nil {
-				log.Errorf("Error writing to server file: %v\n", err)
-			}
-		case <-chSignal:
-			log.Infof("Quitting")
-			return
+	_, err = conn.Write([]byte(fmt.Sprintf("NICK %s\r\n", nick)))
+	if err != nil {
+		log.Fatalf("Failed sending initial NICK cmd")
+	}
+	umsg := fmt.Sprintf("USER %s localhost %s :%s\r\n", nick, cfg.Server.Host, nick)
+	_, err = conn.Write([]byte(umsg))
+	if err != nil {
+		log.Fatalf("Failed sending initial USER cmd")
+	}
+
+	joinChans(conn, cfg.Server.Channels)
+	for {
+		select {
+			case inLine :=<-inFileCh:
+				log.Infof("Command: %s", inLine)
+				err = handleCommand(inLine, conn)
+				if err != nil {
+					log.Warnf("Command error: %v\n", err)
+				}
+			case servLine :=<-connInCh:
+				log.Infof("Server: %s", servLine)
+				_, err := outFile.WriteString(servLine)
+				if err != nil {
+					log.Errorf("Error writing to server file: %v\n", err)
+				}
+			case <-chSignal:
+				log.Infof("Quitting")
+				return
+		}
 	}
 }
 
