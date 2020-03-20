@@ -43,21 +43,12 @@ be a unix socket named `$HOME/.cache/gic/${server}/in`.
 
 # Output
 
-By default, all output goes to standard output.
-
-If the ocnfig file lists a `output`, then under that path
-will be created a series of files:
-
-1. A file named 'server.out' will contain all output for the server
-1. A file named hilights will contain all PMs lines and all channel
-   lines where you were mentioned.
-1. Under the 'channels/' directory, a file named for each channel will
-   contain all output for that channel
-1. Under the 'people/' directory, a file named for each PM'd person will
-   contain all those PMs.
+By default, all output goes to standard output, unless 'quiet' flag
+is given.
 
 If `output` is set to "default", then the output path will be
-`$HOME/.cache/gic/${server}`.
+`$HOME/.cache/gic/${server}`.  Under that path will be (at least) a
+file called 'out.sql' which will contain all output for the server.
 
 # Parsers
 
@@ -76,13 +67,19 @@ standard input.
 
 Planned examples:
 
-1. `gic [ -f config ]`
+1. `gic [ -f config ] [ serve ]`
 
-Simply starts a gic instance.  Over stdin or the input socket you can
-get a simple readline based interaction, i.e. "c #ubuntu" will choose
-only channel #ubuntu for output, "t" will show a tail view, etc.
+Simply starts a gic instance.
 
-All configured forwarders will be activated.
+If no arguments are given, then 'serve' is implied.  This command
+connects to the irc server and serves as the main gic process.  All
+other commands will use this serving instance to do their work.
+
+Over stdin or the input socket you can get a simple readline based
+interaction, i.e. "c #ubuntu" will choose only channel #ubuntu for
+output, "t" will show a tail view, etc.
+
+All configured forwarders (i.e. to jabber etc) will be activated.
 
 1. `gic [ -f config ] -c #channel [ -c #channel ... ]`
 
